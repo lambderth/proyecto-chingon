@@ -10,13 +10,17 @@ import java.util.*;
 public class ChatExtractor {
 
     public static void main(String[] args) {
-        String inputFile = "input.xlsx";   // Path to your Excel file
-        String outputFile = "output.csv";  // Path for the generated CSV
+        String inputFile = "input.xlsx";   // Your input Excel file
+        String outputFile = "output.csv";  // Output CSV file
 
         try (FileInputStream fis = new FileInputStream(inputFile);
              Workbook workbook = new XSSFWorkbook(fis);
              FileWriter fw = new FileWriter(outputFile);
-             CSVWriter writer = new CSVWriter(fw)) {
+             CSVWriter writer = new CSVWriter(fw,
+                     CSVWriter.DEFAULT_SEPARATOR,
+                     CSVWriter.DEFAULT_QUOTE_CHARACTER,   // Ensures double quotes
+                     CSVWriter.DEFAULT_ESCAPE_CHARACTER,
+                     CSVWriter.DEFAULT_LINE_END)) {
 
             Sheet sheet = workbook.getSheetAt(0);
             boolean afterRobot = false;
@@ -26,12 +30,12 @@ public class ChatExtractor {
             StringBuilder visitorMsg = new StringBuilder();
             StringBuilder sender2Msg = new StringBuilder();
             String currentSender = "";
-            String sender2Name = "Agent"; // Default until detected
+            String sender2Name = "Associate"; // Default until detected
 
             for (Row row : sheet) {
                 if (skipHeader) {
                     skipHeader = false;
-                    continue; // skip first header row
+                    continue; // skip Excel header row
                 }
 
                 Cell cell = row.getCell(7); // Column H (index 7)
@@ -40,9 +44,9 @@ public class ChatExtractor {
                 String text = cell.toString().trim();
                 if (text.isEmpty()) continue;
 
-                // Wait until we pass the Robot message
+                // Wait until the Robot message is found
                 if (!afterRobot) {
-                    if (text.contains("Provide a quick summary of your request")) {
+                    if (text.contains("Robot: Provide a quick summary of your request")) {
                         afterRobot = true;
                     }
                     continue;
@@ -55,30 +59,34 @@ public class ChatExtractor {
                 String senderPart = text.substring(0, colonIndex).trim();
                 String message = text.substring(colonIndex + 1).trim();
 
-                // Remove timestamp if present "( ... )"
+                // Remove timestamp e.g. "( 1m 24s )"
                 if (senderPart.contains(")")) {
                     senderPart = senderPart.substring(senderPart.indexOf(")") + 1).trim();
                 }
 
-                // Ignore robot lines
+                // Skip Robot lines
                 if (senderPart.equalsIgnoreCase("Robot")) continue;
 
                 boolean isVisitor = senderPart.equalsIgnoreCase("Visitor");
 
-                // If we meet the first non-Visitor sender, store the name
-                if (!isVisitor && sender2Name.equals("Agent")) {
+                // Capture the first non-Visitor name as the associate name
+                if (!isVisitor && sender2Name.equals("Associate")) {
                     sender2Name = senderPart;
                 }
 
-                // If sender changes, flush previous block
+                // If sender changes, flush previous messages
                 if (!currentSender.isEmpty() && !currentSender.equals(senderPart)) {
-                    rows.add(new String[]{visitorMsg.toString().trim(), sender2Msg.toString().trim()});
+                    rows.add(new String[]{
+                            visitorMsg.toString().trim(),
+                            sender2Msg.toString().trim()
+                    });
                     visitorMsg.setLength(0);
                     sender2Msg.setLength(0);
                 }
 
                 currentSender = senderPart;
 
+                // Add message text (no timestamp, no name)
                 if (isVisitor) {
                     if (visitorMsg.length() > 0) visitorMsg.append("\n");
                     visitorMsg.append(message);
@@ -88,14 +96,22 @@ public class ChatExtractor {
                 }
             }
 
-            // Add the last set of messages
+            // Add last accumulated messages
             if (visitorMsg.length() > 0 || sender2Msg.length() > 0) {
-                rows.add(new String[]{visitorMsg.toString().trim(), sender2Msg.toString().trim()});
+                rows.add(new String[]{
+                        visitorMsg.toString().trim(),
+                        sender2Msg.toString().trim()
+                });
             }
 
-            // Write CSV
+            // Write CSV header and rows
             writer.writeNext(new String[]{"Visitor", sender2Name});
-            writer.writeAll(rows);
+            for (String[] row : rows) {
+                writer.writeNext(new String[]{
+                        row[0].replaceAll("\r", ""),
+                        row[1].replaceAll("\r", "")
+                });
+            }
 
             System.out.println("✅ CSV created successfully: " + outputFile);
 
