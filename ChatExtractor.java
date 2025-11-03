@@ -10,7 +10,7 @@ import java.util.*;
 
 public class ChatExtractor {
     public static void main(String[] args) {
-        String inputFile = "chat_data.xlsx"; // your .xlsx file
+        String inputFile = "chat_data.xlsx"; // your Excel file
         String outputFile = "output.csv";
 
         try (
@@ -20,7 +20,7 @@ public class ChatExtractor {
             CSVWriter writer = new CSVWriter(fw)
         ) {
             Sheet sheet = workbook.getSheetAt(0);
-            int headerRow = 0; // assumes first row is headers
+            int headerRow = 0; // assumes first row has headers
             int conversationCol = 7; // Column H (0-based index)
 
             writer.writeNext(new String[]{"Visitor", "Associate"});
@@ -35,20 +35,22 @@ public class ChatExtractor {
                 String fullConversation = cell.toString().trim();
                 if (fullConversation.isEmpty()) continue;
 
-                // Split the conversation into separate lines
+                // Split conversation into lines
                 String[] lines = fullConversation.split("\\r?\\n");
 
                 boolean startCollecting = false;
                 StringBuilder visitorBuffer = new StringBuilder();
+                StringBuilder associateBuffer = new StringBuilder();
+                String lastSender = "";
 
                 for (String rawLine : lines) {
                     String line = rawLine.trim();
                     if (line.isEmpty()) continue;
 
-                    // Only consider lines with timestamps
+                    // Only lines with timestamps
                     if (!line.matches(".*\\(.*\\).*")) continue;
 
-                    // Detect when Robot gives the signal to start collecting
+                    // Detect Robot trigger
                     if (line.contains("Robot:") &&
                         line.contains("Provide a quick summary of your request")) {
                         startCollecting = true;
@@ -57,38 +59,61 @@ public class ChatExtractor {
 
                     if (!startCollecting) continue;
 
-                    // Skip any remaining Robot lines
+                    // Skip further Robot lines
                     if (line.contains("Robot:")) continue;
 
-                    // Capture Visitor messages
-                    if (line.contains("Visitor:")) {
-                        String message = line.substring(line.indexOf("Visitor:") + 8).trim();
-                        if (visitorBuffer.length() > 0) visitorBuffer.append("\n");
-                        visitorBuffer.append(message);
+                    // Identify sender and message
+                    String sender = "";
+                    String message = "";
 
-                    // Any other sender is treated as Associate
-                    } else if (line.contains(":")) {
-                        String sender = line.substring(line.indexOf(")") + 1, line.indexOf(":")).trim();
-                        if (sender.equalsIgnoreCase("Visitor") || sender.equalsIgnoreCase("Robot"))
-                            continue; // Skip visitors/robots here
+                    int senderStart = line.indexOf(")") + 1;
+                    int senderEnd = line.indexOf(":");
 
-                        String message = line.substring(line.indexOf(":") + 1).trim();
+                    if (senderStart > 0 && senderEnd > senderStart) {
+                        sender = line.substring(senderStart, senderEnd).trim();
+                        message = line.substring(senderEnd + 1).trim();
+                    }
 
-                        if (visitorBuffer.length() > 0 || !message.isEmpty()) {
+                    // Skip invalid lines
+                    if (sender.isEmpty() || message.isEmpty()) continue;
+
+                    // Handle Visitor messages
+                    if (sender.equalsIgnoreCase("Visitor")) {
+                        // If switching from Associate to Visitor, write current pair first
+                        if (lastSender.equals("Associate") && associateBuffer.length() > 0) {
                             writer.writeNext(new String[]{
                                 "\"" + visitorBuffer.toString() + "\"",
-                                "\"" + message + "\""
+                                "\"" + associateBuffer.toString() + "\""
                             });
                             visitorBuffer.setLength(0);
+                            associateBuffer.setLength(0);
                         }
+                        if (visitorBuffer.length() > 0) visitorBuffer.append("\n");
+                        visitorBuffer.append(message);
+                        lastSender = "Visitor";
+
+                    // Handle Associate (any non-Robot, non-Visitor)
+                    } else {
+                        if (lastSender.equals("Visitor") && visitorBuffer.length() > 0 && associateBuffer.length() > 0) {
+                            writer.writeNext(new String[]{
+                                "\"" + visitorBuffer.toString() + "\"",
+                                "\"" + associateBuffer.toString() + "\""
+                            });
+                            visitorBuffer.setLength(0);
+                            associateBuffer.setLength(0);
+                        }
+
+                        if (associateBuffer.length() > 0) associateBuffer.append("\n");
+                        associateBuffer.append(message);
+                        lastSender = "Associate";
                     }
                 }
 
-                // If visitor spoke last and no associate followed
-                if (visitorBuffer.length() > 0) {
+                // Write last pair (if any)
+                if (visitorBuffer.length() > 0 || associateBuffer.length() > 0) {
                     writer.writeNext(new String[]{
                         "\"" + visitorBuffer.toString() + "\"",
-                        "\"\""
+                        "\"" + associateBuffer.toString() + "\""
                     });
                 }
             }
