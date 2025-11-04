@@ -2,85 +2,82 @@ package datapull;
 
 import com.opencsv.CSVReader;
 import com.opencsv.CSVReaderBuilder;
-
 import java.io.FileReader;
 import java.util.*;
+import java.util.regex.*;
 import java.util.stream.Collectors;
 
 public class ConversationDataProvider {
 
-    public static List<String> loadConversations(String csvPath) {
-        LinkedHashMap<String, List<String[]>> groups = new LinkedHashMap<>();
-        String currentId = null;
+    public static class Section {
+        public String sectionId;
+        public List<String> visitorMessages;
+        public List<String> associateMessages;
+
+        public Section(String sectionId, List<String> visitorMessages, List<String> associateMessages) {
+            this.sectionId = sectionId;
+            this.visitorMessages = visitorMessages;
+            this.associateMessages = associateMessages;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("{ \"%s\", %s, %s }", sectionId, visitorMessages, associateMessages);
+        }
+    }
+
+    /**
+     * Returns a list of conversations. Each conversation is a list of Sections.
+     */
+    public static List<List<Section>> loadConversations(String csvPath) {
+        LinkedHashMap<String, List<Section>> conversationsMap = new LinkedHashMap<>();
 
         try (CSVReader reader = new CSVReaderBuilder(new FileReader(csvPath)).build()) {
             List<String[]> rows = reader.readAll();
-            if (rows.size() <= 1) return Collections.emptyList(); // no data
-            rows.remove(0); // drop header
+            if (rows.size() <= 1) return Collections.emptyList();
+            rows.remove(0); // remove header
 
             for (String[] row : rows) {
-                // Expect 3 columns: ID, Visitor, Associate
-                String idCell = safeTrim(row, 0);
-                if (!idCell.isEmpty()) {
-                    currentId = idCell;
-                    groups.putIfAbsent(currentId, new ArrayList<>());
-                }
-                if (currentId == null) continue; // skip stray rows before first ID
+                String rawId = safeTrim(row, 0);
+                if (rawId.isEmpty()) continue;
 
-                String visitorCell = normalizeNewlines(safeGet(row, 1));
-                String associateCell = normalizeNewlines(safeGet(row, 2));
+                String conversationId = extractConversationId(rawId); // e.g. "C1" from "C1 S2"
+                String sectionId = rawId;
 
-                groups.get(currentId).add(new String[]{visitorCell, associateCell});
+                String visitorRaw = safeGet(row, 1);
+                String associateRaw = safeGet(row, 2);
+
+                List<String> visitorMsgs = splitMessages(visitorRaw);
+                List<String> associateMsgs = splitMessages(associateRaw);
+
+                Section section = new Section(sectionId, visitorMsgs, associateMsgs);
+                conversationsMap.computeIfAbsent(conversationId, k -> new ArrayList<>()).add(section);
             }
 
         } catch (Exception e) {
-            throw new RuntimeException("Failed to read CSV " + csvPath, e);
+            throw new RuntimeException("Failed to parse CSV: " + e.getMessage(), e);
         }
 
-        // Build ordered conversation string for each group
-        return groups.entrySet().stream()
-                .map(entry -> {
-                    String id = entry.getKey();
-                    StringBuilder out = new StringBuilder();
-                    out.append("Conversation ").append(id).append(":\n");
+        // Convert to ordered list of conversations
+        return new ArrayList<>(conversationsMap.values());
+    }
 
-                    for (String[] row : entry.getValue()) {
-                        String visitor = row[0];
-                        String associate = row[1];
+    // --- Utility methods ---
 
-                        // For each row keep the order: visitor block then associate block
-                        if (!visitor.isBlank()) {
-                            appendSpeakerBlock(out, "Visitor", visitor);
-                        }
-                        if (!associate.isBlank()) {
-                            appendSpeakerBlock(out, "Associate", associate);
-                        }
-                    }
+    private static String extractConversationId(String rawId) {
+        // Capture prefix like "C1" from "C1 S1"
+        Matcher m = Pattern.compile("^(C\\d+)").matcher(rawId.trim());
+        return m.find() ? m.group(1) : rawId;
+    }
 
-                    return out.toString().trim();
-                })
+    private static List<String> splitMessages(String text) {
+        if (text == null || text.isBlank()) return Collections.singletonList("");
+        // Normalize any escaped \r\n or \n and then split
+        String normalized = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n");
+        return Arrays.stream(normalized.split("\\n"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
                 .collect(Collectors.toList());
-    }
-
-    private static void appendSpeakerBlock(StringBuilder sb, String speakerLabel, String text) {
-        // Split into lines preserving order
-        String[] lines = text.split("\\n", -1);
-        if (lines.length == 0) return;
-        // Label only the first line; subsequent lines continue without label (as you requested)
-        sb.append(speakerLabel).append(": ").append(lines[0]).append("\n");
-        for (int i = 1; i < lines.length; i++) {
-            sb.append(lines[i]).append("\n");
-        }
-        sb.append("\n"); // blank line between blocks to improve readability (optional)
-    }
-
-    private static String normalizeNewlines(String input) {
-        if (input == null) return "";
-        // Handle escaped sequences literal "\r\n" or "\n"
-        String s = input.replace("\\r\\n", "\n").replace("\\n", "\n");
-        // Convert any remaining CRLF or CR into single '\n'
-        s = s.replace("\r\n", "\n").replace("\r", "\n");
-        return s;
     }
 
     private static String safeGet(String[] row, int idx) {
