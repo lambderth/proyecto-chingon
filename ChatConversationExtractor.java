@@ -36,6 +36,9 @@ public class ChatConversationExtractor {
             int conversationIndex = 1;
 
             for (Row row : sheet) {
+                // Skip header row (first row)
+                if (row.getRowNum() == 0) continue;
+                
                 Cell cell = row.getCell(7); // column H (0-based)
                 if (cell == null) continue;
 
@@ -70,6 +73,12 @@ public class ChatConversationExtractor {
         for (String line : lines) {
             line = line.trim();
             if (line.isEmpty()) continue;
+
+            // Check if line has a timestamp - must start with "( " and contain ") "
+            if (!line.startsWith("( ") || !line.contains(") ")) {
+                // Skip messages without timestamp
+                continue;
+            }
 
             // Remove timestamp up to first ") "
             int closeParen = line.indexOf(") ");
